@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+
+import argparse
+import boto3
+import boto.utils
+import sys
+
+
+"""
+When run on an AWS EC2 instance, this script will generate a config.json file
+suitable for consul agents or servers.  It is intended to be run as a
+ExecStartPre task of the systemd consul.service file.
+
+The script takes two arguments, both optional:
+    --file <filename>  Write output to a file instead of stdout.
+    --server           Generate a server config instead of the (default) client.
+"""
+
+
+__author__ = "Steve Crook"
+
+
+def get_args(argv=None):
+    parser = argparse.ArgumentParser(
+            description='Dynamically generate consul config',
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--server', dest='server', action='store_true',
+                        help='Generate a server config')
+    parser.add_argument('--file', dest='filename', type=str, default=None,
+                        help='Filename to write config into')
+    return parser.parse_args(argv)
+
+
+# mangle_keys ensures all keys within the metadata object use underscores as
+# separators, not hyphens.
+def mangle_keys(obj):
+    for key in obj.keys():
+        new_key = key.replace("-", "_")
+        if new_key != key:
+            if isinstance(obj[key], dict):
+                obj[new_key] = mangle_keys(obj[key])
+            else:
+                obj[new_key] = obj[key]
+            del obj[key]
+    return obj
+
+
+# Given an instance ID and region, return a dictionary of Key/Value pairs
+# representing the EC2 tags.
+def get_tags(instance_id, region):
+    ec2 = boto3.resource('ec2', region_name=region)
+    ec2instance = ec2.Instance(instance_id)
+    return ec2instance.tags
+
+
+# Grab the EC2 metadata relating to the local instance.
+def get_metadata():
+    metadata = boto.utils.get_instance_metadata()
+    metadata['user_data'] = boto.utils.get_instance_userdata()
+    metadata['identity'] = boto.utils.get_instance_identity()
+    metadata = mangle_keys(metadata)
+
+    region = metadata['identity']['document']['region']
+    metadata['identity']['document']['region_short'] = region.replace('-', '')
+    instance_id = metadata['instance_id']
+    metadata['tags'] = {t['Key'].lower(): t['Value'] for t in get_tags(instance_id, region)}
+    metadata['hostname'] = metadata['tags']['name'].replace('_', '-')
+    return metadata
+
+
+def client_template():
+    return """{{
+    "bind_addr": "{local_ipv4}",
+    "datacenter": "{identity[document][region_short]}",
+    "data_dir": "/var/local/lib/consul",
+    "enable_script_checks": true,
+    "node_name": "{hostname}",
+    "node_meta": {{
+        "cluster": "{tags[cluster]}",
+        "ec2_type": "{instance_type}",
+        "legacy_hostname": "{tags[name]}"
+    }},
+    "retry_join": ["10.11.140.174:8301", "10.11.140.149:8301", "10.11.140.160:8301"],
+    "server": false
+}}
+"""
+
+
+def server_template():
+    return """{{
+    "bootstrap_expect": 3,
+    "datacenter": "{identity[document][region_short]}",
+    "data_dir": "/var/local/lib/consul",
+    "enable_script_checks": true,
+    "node_name": "{hostname}",
+    "node_meta": {{
+        "cluster": "{tags[cluster]}",
+        "ec2_type": "{instance_type}",
+        "legacy_hostname": "{tags[name]}"
+    }},
+    "retry_join": ["10.11.140.174:8301", "10.11.140.149:8301", "10.11.140.160:8301"],
+    "server": true,
+    "ui": true
+}}
+"""
+
+
+args = get_args()
+metadata = get_metadata()
+
+# Use the client template unless run with the --server flag.
+if args.server:
+    template = server_template()
+else:
+    template = client_template()
+
+# Write to stdout unless a filename is provided.
+if args.filename is None:
+    sys.stdout.write(template.format(**metadata))
+else:
+    with open(args.filename, 'w') as f:
+        f.write(template.format(**metadata))
