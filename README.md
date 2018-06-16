@@ -1,3 +1,4 @@
+<h1>make_consul_config</h1>
 This script provides an example of how a consul config can be generated
 dynamically from AWS EC2 Metadata.  The templates can be easily modified to
 incorporate other configuration options, such as the cloud auto-joining options
@@ -6,7 +7,7 @@ in Consul>=0.91 (https://www.consul.io/docs/agent/cloud-auto-join.html).
 This script can be run stand-alone to write a config to STDOUT, or from a
 systemd service file, such as:
 
-----------
+<pre>
 [Unit]
 Description=Consul
 Wants=network-online.target
@@ -23,13 +24,16 @@ KillSignal=SIGINT
 
 [Install]
 WantedBy=multi-user.target
-----------
+</pre>
 
 Requirements:
-python-boto
-python-boto3
+<ul>
+<li>python-boto</li>
+<li>python-boto3</li>
+</ul>
 
 IAM Policy Requirements:
+<pre>
 {
    "Version": "2012-10-17",
    "Statement": [{
@@ -39,3 +43,4 @@ IAM Policy Requirements:
     }
    ]
 }
+</pre>
